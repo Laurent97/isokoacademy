@@ -19,6 +19,7 @@ export default function TabsLayout() {
   const { theme } = useSettings();
 
   return (
+    <>
     <Tabs
       screenOptions={({ route }) => ({
         headerShown: true,
@@ -49,5 +50,20 @@ export default function TabsLayout() {
       <Tabs.Screen name="wallet" options={{ title: t('tab_wallet') }} />
       <Tabs.Screen name="coach" options={{ title: t('tab_coach') }} />
     </Tabs>
+    {/* floating AI bubble (WhatsApp-style) — opens the coach from any tab */}
+    <TouchableOpacity
+      onPress={() => router.push('/(tabs)/coach')}
+      accessibilityLabel="Ask AI"
+      style={{
+        position: 'absolute', right: 16, bottom: 84,
+        width: 56, height: 56, borderRadius: 28,
+        backgroundColor: '#22c55e',
+        alignItems: 'center', justifyContent: 'center',
+        shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
+        elevation: 8, zIndex: 100,
+      }}>
+      <Ionicons name="chatbubble-ellipses" size={28} color="#fff" />
+    </TouchableOpacity>
+    </>
   );
 }
