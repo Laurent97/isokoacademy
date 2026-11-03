@@ -1,0 +1,13 @@
+{
+  "name": "isoko-academy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Isoko Academy - full stack (backend API + Expo mobile app + admin dashboard)",
+  "scripts": {
+    "dev": "npm --prefix backend run dev",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:mobile": "npm --prefix mobile start",
+    "install:all": "npm --prefix backend install && npm --prefix mobile install",
+    "migrate": "npm --prefix backend run migrate"
+  }
+}

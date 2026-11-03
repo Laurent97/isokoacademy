@@ -1,0 +1,298 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+html,body{margin:0;height:100%;background:#0C0A09;overflow:hidden;font-family:Inter,system-ui,Arial}
+#chart{position:absolute;inset:0}
+#legend{position:absolute;top:10px;left:12px;color:#fff;font-size:12px;z-index:2;pointer-events:none}
+#legend b{color:#fff}#legend span{color:#A8A29E;margin-left:8px}
+#bar{position:absolute;top:8px;right:8px;display:flex;gap:4px;z-index:2;flex-wrap:wrap;justify-content:flex-end;max-width:70%}
+#bar button{background:#1C1917;color:#A8A29E;border:1px solid #292524;border-radius:6px;padding:4px 9px;font-size:11px;font-weight:600;cursor:pointer}
+#bar button.on{background:#0F5132;color:#fff;border-color:#0F5132}
+#bar button.draw{background:#292524}
+#hint{position:absolute;bottom:8px;left:0;right:0;text-align:center;color:#D97706;font-size:11px;display:none;z-index:2}
+</style></head><body>
+<div id="chart"></div>
+<div id="legend"><b id="sym"></b><span id="tf"></span><span id="price"></span></div>
+<div id="bar"></div>
+<div id="hint">Tap the chart to place a support/resistance line</div>
+<div id="replay" style="display:none;position:absolute;bottom:0;left:0;right:0;background:#1C1917;padding:8px 12px;z-index:3">
+  <div style="display:flex;align-items:center;gap:8px">
+    <button id="rp-play" style="background:#0F5132;color:#fff;border:0;border-radius:6px;padding:4px 10px;font-size:12px">▶</button>
+    <select id="rp-speed" style="background:#292524;color:#A8A29E;border:0;border-radius:6px;padding:4px;font-size:11px">
+      <option value="1">1×</option><option value="5" selected>5×</option><option value="20">20×</option>
+    </select>
+    <input id="rp-range" type="range" min="0" max="100" value="0" style="flex:1;accent-color:#D97706">
+    <span id="rp-pos" style="color:#A8A29E;font-size:11px;font-family:monospace">0/0</span>
+  </div>
+</div>
+<script>
+const Q=new URLSearchParams(location.search);
+const symbol=Q.get('symbol')||'XAU/USD'; let tf=Q.get('tf')||'15m';
+const API=(Q.get('api')||'')+'/api/chart/history';
+document.getElementById('sym').textContent=symbol;
+const chart=LightweightCharts.createChart(document.getElementById('chart'),{
+  autoSize:true,
+  layout:{background:{type:'solid',color:'#0C0A09'},textColor:'#A8A29E',fontSize:11},
+  grid:{vertLines:{color:'#1C1917'},horzLines:{color:'#1C1917'}},
+  crosshair:{mode:1,vertLine:{color:'#D97706',width:1,style:3,labelBackgroundColor:'#D97706'},
+             horzLine:{color:'#D97706',width:1,style:3,labelBackgroundColor:'#D97706'}},
+  rightPriceScale:{borderColor:'#292524',scaleMargins:{top:.1,bottom:.25}},
+  timeScale:{borderColor:'#292524',timeVisible:true},
+});
+const candles=chart.addCandlestickSeries({upColor:'#15803D',downColor:'#B91C1C',
+  borderUpColor:'#15803D',borderDownColor:'#B91C1C',wickUpColor:'#15803D',wickDownColor:'#B91C1C'});
+const vol=chart.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'v'});
+chart.priceScale('v').applyOptions({scaleMargins:{top:.8,bottom:0}});
+let BARS=[];
+chart.subscribeCrosshairMove(p=>{const d=p.seriesData.get(candles);
+  document.getElementById('price').textContent=d?('  O '+d.open.toFixed(2)+'  H '+d.high.toFixed(2)+'  L '+d.low.toFixed(2)+'  C '+d.close.toFixed(2)):'';});
+
+// ---- indicators (computed in JS) ----
+const sma=(p)=>BARS.map((_,i)=>i<p-1?null:{time:BARS[i].time,value:BARS.slice(i-p+1,i+1).reduce((s,b)=>s+b.close,0)/p}).filter(Boolean);
+const rsi=(p=14)=>{const out=[];let g=0,l=0;
+  for(let i=1;i<BARS.length;i++){const d=BARS[i].close-BARS[i-1].close;
+    g=(g*(p-1)+Math.max(d,0))/p;l=(l*(p-1)+Math.max(-d,0))/p;
+    if(i>=p)out.push({time:BARS[i].time,value:100-100/(1+(l===0?100:g/l))});}
+  return out;};
+let ma20=null,ma50=null,rsiS=null;
+function drawIndicators(){
+  if(ma20){chart.removeSeries(ma20);ma20=null}
+  if(ma50){chart.removeSeries(ma50);ma50=null}
+  if(rsiS){chart.removeSeries(rsiS);rsiS=null}
+  if(SHOW.ma20){ma20=chart.addLineSeries({color:'#D97706',lineWidth:2,priceLineVisible:false,lastValueVisible:false});ma20.setData(sma(20));}
+  if(SHOW.ma50){ma50=chart.addLineSeries({color:'#8B5CF6',lineWidth:2,priceLineVisible:false,lastValueVisible:false});ma50.setData(sma(50));}
+  if(SHOW.rsi){rsiS=chart.addLineSeries({color:'#17A2B8',lineWidth:2,priceScaleId:'rsi',priceLineVisible:false,lastValueVisible:false});
+    chart.priceScale('rsi').applyOptions({scaleMargins:{top:.72,bottom:.05}});rsiS.setData(rsi());}
+}
+const SHOW={ma20:false,ma50:false,rsi:false};
+
+// ---- trend-line drawing (two clicks) ----
+const tlines=[];let tlPoint=null;
+function tryTrendline(p){
+  const t=p.time,pr=candles.coordinateToPrice(p.point.y);
+  if(t==null||pr==null)return false;
+  if(!tlPoint){tlPoint={time:t,price:pr};hint.textContent='Tap the second point to finish the trend line';return true;}
+  const s=chart.addLineSeries({color:'#D97706',lineWidth:2,lineStyle:0,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+  s.setData([{time:Math.min(tlPoint.time,t),value:tlPoint.time<t?tlPoint.price:pr},
+             {time:Math.max(tlPoint.time,t),value:tlPoint.time<t?pr:tlPoint.price}]);
+  tlines.push(s);tlPoint=null;
+  try{const m=JSON.stringify({type:'draw',tool:'trend',points:[tlPoint?tlPoint:null,{time:t,price:pr}]});window.ReactNativeWebView?window.ReactNativeWebView.postMessage(m):parent!==window&&parent.postMessage(JSON.parse(m),'*')}catch(e){}
+  try{localStorage.setItem('tl_'+symbol+'_'+tf,JSON.stringify(tlines.map(l=>l.data?l.data():null).filter(Boolean)))}catch(e){}
+  hint.style.display='none';drawMode=null;
+  return true;
+}
+// ---- fib drawing (two clicks: high then low, auto levels) ----
+const fibLines=[];let fibPt=null;
+const FIBS=[[0,'0%'],[.236,'23.6%'],[.382,'38.2%'],[.5,'50%'],[.618,'61.8%'],[.786,'78.6%'],[1,'100%']];
+function tryFib(p){
+  const pr=candles.coordinateToPrice(p.point.y);
+  if(pr==null)return;
+  if(!fibPt){fibPt=pr;hint.textContent='Tap the other extreme (swing high or low)';return;}
+  const hi=Math.max(fibPt,pr),lo=Math.min(fibPt,pr),rng=hi-lo;
+  FIBS.forEach(([f,l])=>fibLines.push(candles.createPriceLine({
+    price:hi-rng*f,color:'#D97706',lineWidth:f===0||f===1?2:1,lineStyle:f===0||f===1?0:2,
+    axisLabelVisible:true,title:'Fib '+l})));
+  try{const m=JSON.stringify({type:'draw',tool:'fib',high:hi,low:lo});window.ReactNativeWebView?window.ReactNativeWebView.postMessage(m):parent!==window&&parent.postMessage(JSON.parse(m),'*')}catch(e){}
+  fibPt=null;hint.style.display='none';drawMode=null;
+}
+// ---- zone box (two clicks: two price extremes) ----
+const zoneLines=[];let zonePt=null;
+function tryZone(p){
+  const pr=candles.coordinateToPrice(p.point.y);
+  if(pr==null)return;
+  if(!zonePt){zonePt=pr;hint.textContent='Tap the other edge of the zone';return;}
+  const hi=Math.max(zonePt,pr),lo=Math.min(zonePt,pr);
+  zoneLines.push(candles.createPriceLine({price:hi,color:'#17A2B8',lineWidth:2,lineStyle:0,axisLabelVisible:true,title:'Zone'}));
+  zoneLines.push(candles.createPriceLine({price:lo,color:'#17A2B8',lineWidth:2,lineStyle:0,axisLabelVisible:true,title:'Zone'}));
+  try{const m=JSON.stringify({type:'draw',tool:'zone',high:hi,low:lo});window.ReactNativeWebView?window.ReactNativeWebView.postMessage(m):parent!==window&&parent.postMessage(JSON.parse(m),'*')}catch(e){}
+  zonePt=null;hint.style.display='none';drawMode=null;
+}
+// ---- channel (3 clicks: 2 for the line, 1 for parallel offset) ----
+const chanSeries=[];let chanPts=[];
+function tryChan(p){
+  const t=p.time,pr=candles.coordinateToPrice(p.point.y);
+  if(t==null||pr==null)return;
+  chanPts.push({time:t,price:pr});
+  if(chanPts.length===1){hint.textContent='Tap the second anchor';return;}
+  if(chanPts.length===2){hint.textContent='Tap the parallel offset';return;}
+  const [a,b,c]=chanPts;
+  const slope=(b.price-a.price)/(Math.max(b.time,1)-Math.max(a.time,1)||1);
+  const t0=Math.min(a.time,b.time),t1=Math.max(a.time,b.time);
+  const p0=a.time<b.time?a.price:b.price,p1=a.time<b.time?b.price:a.price;
+  const off=(c.price-(p0+slope*(c.time-t0)));
+  const mk=(f)=>{const s=chart.addLineSeries({color:'#8B5CF6',lineWidth:1.5,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+    s.setData([{time:t0,value:p0+f},{time:t1,value:p1+f}]);chanSeries.push(s);};
+  mk(0);mk(off);
+  try{const m=JSON.stringify({type:'draw',tool:'channel'});window.ReactNativeWebView?window.ReactNativeWebView.postMessage(m):parent!==window&&parent.postMessage(JSON.parse(m),'*')}catch(e){}
+  chanPts=[];hint.style.display='none';drawMode=null;
+}
+// ---- ray (2 clicks: line through both pts extended to last bar) ----
+const raySeries=[];let rayPt=null;
+function tryRay(p){
+  const t=p.time,pr=candles.coordinateToPrice(p.point.y);
+  if(t==null||pr==null)return;
+  if(!rayPt){rayPt={time:t,price:pr};hint.textContent='Tap the direction point';return;}
+  const a=rayPt.time<t?rayPt:{time:t,price:pr},b=rayPt.time<t?{time:t,price:pr}:rayPt;
+  const end=BARS[BARS.length-1].time;
+  const slope=(b.price-a.price)/(b.time-a.time||1);
+  const s=chart.addLineSeries({color:'#D97706',lineWidth:2,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+  s.setData([{time:a.time,value:a.price},{time:end,value:a.price+slope*(end-a.time)}]);
+  raySeries.push(s);rayPt=null;hint.style.display='none';drawMode=null;
+  try{const m=JSON.stringify({type:'draw',tool:'ray'});window.ReactNativeWebView?window.ReactNativeWebView.postMessage(m):parent!==window&&parent.postMessage(JSON.parse(m),'*')}catch(e){}
+}
+// ---- text labels (click → prompt → marker) ----
+const textMarks=[];
+function tryText(p){
+  const t=p.time;if(t==null)return;
+  const txt=(window.prompt&&window.prompt('Label text:','Note'))||null;
+  if(!txt){drawMode=null;hint.style.display='none';return;}
+  textMarks.push({time:t,position:'aboveBar',color:'#F5EFE6',shape:'circle',text:txt});
+  candles.setMarkers(textMarks);hint.style.display='none';drawMode=null;
+  try{const m=JSON.stringify({type:'draw',tool:'text',text:txt});window.ReactNativeWebView?window.ReactNativeWebView.postMessage(m):parent!==window&&parent.postMessage(JSON.parse(m),'*')}catch(e){}
+}
+// ---- S/R drawing (click to place horizontal line) ----
+let drawMode=null;const hlines=[];
+chart.subscribeClick(p=>{
+  if(drawMode==='trend'&&p.point){tryTrendline(p);return;}
+  if(drawMode==='fib'&&p.point){tryFib(p);return;}
+  if(drawMode==='zone'&&p.point){tryZone(p);return;}
+  if(drawMode==='chan'&&p.point){tryChan(p);return;}
+  if(drawMode==='ray'&&p.point){tryRay(p);return;}
+  if(drawMode==='text'&&p.point){tryText(p);return;}
+  if(drawMode!=='hline'||!p.point)return;
+  const price=candles.coordinateToPrice(p.point.y);
+  if(price==null)return;
+  const pl=candles.createPriceLine({price,color:'#D97706',lineWidth:2,lineStyle:2,axisLabelVisible:true,title:'S/R'});
+  hlines.push(pl);
+  try{const m=JSON.stringify({type:'draw',tool:'hline',price});window.ReactNativeWebView?window.ReactNativeWebView.postMessage(m):parent!==window&&parent.postMessage(JSON.parse(m),'*')}catch(e){}
+  try{localStorage.setItem('sr_'+symbol+'_'+tf,JSON.stringify(hlines.map(l=>l.options().price)))}catch(e){}
+});
+function loadSR(){try{JSON.parse(localStorage.getItem('sr_'+symbol+'_'+tf)||'[]').forEach(pr=>hlines.push(candles.createPriceLine({price:pr,color:'#D97706',lineWidth:2,lineStyle:2,axisLabelVisible:true,title:'S/R'})))}catch(e){}}
+
+// ---- draggable SL/TP lines ----
+// Drag by mousedown near a line. SL=red, TP=green. Sends updates via postMessage.
+const sltp={sl:null,tp:null};
+function setSLTP(sl,tp){
+  if(sltp.sl)candles.removePriceLine(sltp.sl);
+  if(sltp.tp)candles.removePriceLine(sltp.tp);
+  sltp.sl=sl!=null?candles.createPriceLine({price:sl,color:'#B91C1C',lineWidth:2,lineStyle:0,axisLabelVisible:true,title:'SL'}):null;
+  sltp.tp=tp!=null?candles.createPriceLine({price:tp,color:'#15803D',lineWidth:2,lineStyle:0,axisLabelVisible:true,title:'TP'}):null;
+}
+let drag=null;
+chart.subscribeClick(()=>{});
+const el=document.getElementById('chart');
+el.addEventListener('pointerdown',e=>{
+  if(drawMode)return;
+  for(const k of ['sl','tp']){
+    if(!sltp[k])continue;
+    const y=candles.priceToCoordinate(sltp[k].options().price);
+    if(y!=null&&Math.abs(e.clientY-y)<8){drag=k;e.preventDefault();break;}
+  }
+});
+window.addEventListener('pointermove',e=>{
+  if(!drag)return;
+  const pr=candles.coordinateToPrice(e.clientY);
+  if(pr!=null){const o={...sltp[drag].options(),price:pr};candles.removePriceLine(sltp[drag]);
+    sltp[drag]=candles.createPriceLine(o);}
+});
+window.addEventListener('pointerup',e=>{
+  if(!drag)return;
+  const side=drag;drag=null;
+  const msg={type:'sltp',sl:sltp.sl?.options().price??null,tp:sltp.tp?.options().price??null};
+  try{if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(msg));
+    else if(parent!==window)parent.postMessage(msg,'*');}catch(err){}
+});
+
+// ---- toolbar ----
+const TFS=['1m','5m','15m','1h','4h','1d'];
+let PRO=false;
+const TOOLS=[['ma20','MA20'],['ma50','MA50'],['rsi','RSI'],['trend','╱ Trend'],['hline','⌐ S/R'],['clear','✕']];
+const PRO_TOOLS=[['fib','φ Fib'],['zone','▭ Zone'],['chan','∥ Chan'],['ray','↗ Ray'],['text','T Text']];
+const bar=document.getElementById('bar');
+function renderBar(){
+  bar.innerHTML=TFS.map(t=>`<button class="${t===tf?'on':''}" data-t="${t}">${t}</button>`).join('')
+    +`<button data-k="pro" class="${PRO?'on':''}" style="background:${PRO?'#D97706':'#292524'};color:${PRO?'#0C0A09':'#A8A29E'}">PRO</button>`
+    +TOOLS.concat(PRO?PRO_TOOLS:[]).map(([k,l])=>`<button class="${SHOW[k]?'on':''} ${['hline','trend','fib','zone','chan','ray','text','clear'].includes(k)?'draw':''}" data-k="${k}">${l}</button>`).join('');
+  bar.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    if(b.dataset.t){tf=b.dataset.t;renderBar();load();return;}
+    const k=b.dataset.k;
+    if(k==='pro'){PRO=!PRO;renderBar();return;}
+    if(k==='clear'){hlines.forEach(l=>candles.removePriceLine(l));hlines.length=0;tlines.forEach(l=>chart.removeSeries(l));tlines.length=0;
+      fibLines.forEach(l=>candles.removePriceLine(l));fibLines.length=0;fibPt=null;
+      zoneLines.forEach(l=>candles.removePriceLine(l));zoneLines.length=0;zonePt=null;
+      chanSeries.forEach(l=>chart.removeSeries(l));chanSeries.length=0;chanPts=[];
+      raySeries.forEach(l=>chart.removeSeries(l));raySeries.length=0;rayPt=null;
+      textMarks.length=0;candles.setMarkers([]);
+      localStorage.removeItem('sr_'+symbol+'_'+tf);localStorage.removeItem('tl_'+symbol+'_'+tf);return;}
+    if(['hline','trend','fib','zone','chan','ray','text'].includes(k)){drawMode=drawMode===k?null:k;b.classList.toggle('on',drawMode===k);
+      document.getElementById('hint').textContent={trend:'Tap two points to draw a trend line',fib:'Tap the swing high or low first',zone:'Tap one edge of the supply/demand zone',chan:'Tap two points for the base line',ray:'Tap the start, then the direction point',text:'Tap where the label goes'}[k]||'Tap the chart to place a support/resistance line';
+      document.getElementById('hint').style.display=drawMode?'block':'none';tlPoint=null;fibPt=null;zonePt=null;chanPts=[];rayPt=null;return;}
+    SHOW[k]=!SHOW[k];b.classList.toggle('on',SHOW[k]);drawIndicators();
+    try{const m=JSON.stringify({type:'draw',tool:'indicator',ind:k,on:SHOW[k]});window.ReactNativeWebView?window.ReactNativeWebView.postMessage(m):parent!==window&&parent.postMessage(JSON.parse(m),'*')}catch(e){}
+  });
+  document.getElementById('tf').textContent=tf;
+}
+async function load(){
+  try{
+    const r=await fetch(API+'?symbol='+encodeURIComponent(symbol)+'&tf='+tf+'&count=150');
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const j=await r.json();BARS=j.bars;
+    candles.setData(BARS);
+    vol.setData(BARS.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?'rgba(21,128,61,.4)':'rgba(185,28,28,.4)'})));
+    chart.timeScale().fitContent();
+    drawIndicators();loadSR();
+  }catch(e){setTimeout(load,3000);}
+}
+// host can set SL/TP via postMessage({sl:..,tp:..})
+window.addEventListener('message',e=>{const d=e.data||{};if(d.sl!=null||d.tp!=null)setSLTP(d.sl,d.tp);});
+// seed from query params for static use
+if(Q.get('sl')||Q.get('tp'))setSLTP(parseFloat(Q.get('sl'))||null,parseFloat(Q.get('tp'))||null);
+
+// ---- replay mode (?replay=<seed>) ----
+const REPLAY_SEED=Q.get('replay');
+let REPLAY={full:[],pos:60,playing:false,timer:null,total:0};
+async function initReplay(){
+  let j;
+  try{
+    const r=await fetch((Q.get('api')||'')+'/api/chart/replay?seed='+REPLAY_SEED+'&symbol='+encodeURIComponent(symbol)+'&count=200');
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    j=await r.json();
+  }catch(e){setTimeout(initReplay,3000);return;}
+  REPLAY.full=j.bars;REPLAY.total=j.bars.length;
+  document.getElementById('replay').style.display='block';
+  document.getElementById('rp-range').max=REPLAY.total;
+  // news event markers: deterministic ~3 spikes seeded
+  const evTimes=[0.25,0.55,0.8].map(f=>REPLAY.full[Math.floor(REPLAY.total*f)]?.time).filter(Boolean);
+  const evNames=['CPI Release','NFP Report','Fed Decision'];
+  setMarkers(evTimes.map((t,i)=>({time:t,position:'aboveBar',color:'#D97706',shape:'arrowDown',text:evNames[i%3]})));
+  drawBars(REPLAY.full.slice(0,REPLAY.pos));
+}
+function setMarkers(m){candles.setMarkers(m);}
+function drawBars(bars){
+  BARS=bars;
+  candles.setData(bars);
+  vol.setData(bars.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?'rgba(21,128,61,.4)':'rgba(185,28,28,.4)'})));
+  chart.timeScale().fitContent();
+  document.getElementById('rp-pos').textContent=REPLAY.pos+'/'+REPLAY.total;
+  document.getElementById('rp-range').value=REPLAY.pos;
+}
+document.getElementById('rp-play').onclick=()=>{
+  REPLAY.playing=!REPLAY.playing;
+  document.getElementById('rp-play').textContent=REPLAY.playing?'⏸':'▶';
+  const step=()=>{if(!REPLAY.playing)return;
+    const sp=parseInt(document.getElementById('rp-speed').value);
+    REPLAY.pos=Math.min(REPLAY.total,REPLAY.pos+(sp===1?1:sp/5));
+    drawBars(REPLAY.full.slice(0,Math.floor(REPLAY.pos)));
+    if(REPLAY.pos>=REPLAY.total){REPLAY.playing=false;document.getElementById('rp-play').textContent='▶';return;}
+    REPLAY.timer=setTimeout(step,120);};
+  step();
+};
+document.getElementById('rp-range').oninput=e=>{REPLAY.pos=+e.target.value;drawBars(REPLAY.full.slice(0,REPLAY.pos));};
+
+if(REPLAY_SEED){
+  renderBar();initReplay();
+}else{
+  renderBar();load();setInterval(load,5000);
+}
+</script></body></html>
