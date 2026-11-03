@@ -23,6 +23,25 @@ export default function TradeTicket() {
   const [error, setError] = useState(null);
   const [emotion, setEmotion] = useState(null); // calm | chasing | angry
   const [warnings, setWarnings] = useState([]);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiNote, setAiNote] = useState(null);
+
+  // AI SL/TP suggestion: server computes levels (swing + 1:2 R:R), AI explains why
+  const suggest = async () => {
+    setAiBusy(true); setError(null);
+    try {
+      const { data } = await api.post('/ai/suggest-sltp', {
+        symbol, side, entry_price: price, lot_size: lots,
+      });
+      setSl(String(data.stop_loss));
+      setTp(String(data.take_profit));
+      setAiNote(data.explanation);
+    } catch (e) {
+      setError(errMsg(e, t('error_generic')));
+    } finally {
+      setAiBusy(false);
+    }
+  };
 
   const decimals = symbol === 'USD/JPY' || symbol === 'XAU/USD' ? 3 : 5;
   const pipDec = symbol === 'USD/JPY' || symbol === 'XAU/USD' ? 2 : 4;
@@ -86,7 +105,7 @@ export default function TradeTicket() {
           {/* side toggle */}
           <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md }}>
             {['buy', 'sell'].map(s => (
-              <TouchableOpacity key={s} onPress={() => setSide(s)}
+              <TouchableOpacity key={s} onPress={() => { setSide(s); setAiNote(null); }}
                 style={{
                   flex: 1, minHeight: TOUCH_TARGET, borderRadius: radius.sm,
                   alignItems: 'center', justifyContent: 'center',
@@ -118,6 +137,17 @@ export default function TradeTicket() {
               </TouchableOpacity>
             ))}
           </View>
+
+          <Btn
+            title={t('ai_suggest_sltp')}
+            variant="secondary" small loading={aiBusy} disabled={!price}
+            onPress={suggest} style={{ marginBottom: spacing.sm }}
+          />
+          {aiNote && (
+            <Card style={{ marginBottom: spacing.md, borderLeftWidth: 4, borderLeftColor: theme.primary }}>
+              <T size="small" color={theme.textSecondary}>{aiNote}</T>
+            </Card>
+          )}
 
           <T size="small" color={theme.textSecondary}>{t('stop_loss')}</T>
           <TextInput style={[input, { marginBottom: spacing.sm, marginTop: 4 }]}

@@ -853,7 +853,8 @@ INSERT INTO ai_config (feature, is_enabled, max_calls_per_user_per_day, max_cost
 ('lesson_explainer', true, 20, 0.05, 'You are an educational AI assistant for Isoko Academy. Explain trading concepts in simple language. Never give financial advice. Always label responses as educational only.'),
 ('trade_reviewer', true, 20, 0.05, 'You are an educational AI coach for Isoko Academy. Review practice trades and provide feedback on risk management. Never promise profit. Always label responses as educational only.'),
 ('study_plan', true, 5, 0.05, 'You are an educational AI planner for Isoko Academy. Create study plans based on user performance. Never give financial advice. Always label responses as educational only.'),
-('question_generator', true, 5, 0.05, 'You are an educational AI content generator for Isoko Academy. Generate quiz questions for admin approval. Never give financial advice. Always label responses as educational only.') ON CONFLICT DO NOTHING;
+('question_generator', true, 5, 0.05, 'You are an educational AI content generator for Isoko Academy. Generate quiz questions for admin approval. Never give financial advice. Always label responses as educational only.'),
+('sltp_advisor', true, 10, 0.05, 'You are an educational trading coach. Explain SL/TP placement concepts simply. Never promise profit or give signals. Always label as educational.') ON CONFLICT DO NOTHING;
 
 -- ============================================================
 -- END OF SCHEMA

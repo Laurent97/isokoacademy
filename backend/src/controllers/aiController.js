@@ -184,6 +184,77 @@ const chat = (req, res) =>
   handleCoach(req, res, 'lesson_explainer', (r) => String(r.body.message || ''));
 
 /**
+ * POST /ai/suggest-sltp { symbol, side, entry_price?, lot_size? }
+ * Deterministic SL/TP from recent swing structure (SL beyond the swing,
+ * TP at 2R). The AI only explains the reasoning — numbers never come
+ * from the model, so suggestions are reproducible and safe offline.
+ */
+const suggestSltp = async (req, res) => {
+  try {
+    const { symbol, side = 'buy', lot_size = 0.01 } = req.body || {};
+    const isBuy = side !== 'sell';
+
+    const cfg = await featureConfig('sltp_advisor');
+    if (!cfg.is_enabled) return res.status(403).json({ error: 'sltp_advisor is currently disabled' });
+    const usage = await dailyUsage(req.user.id);
+    if (usage.calls_made >= cfg.max_calls_per_user_per_day) {
+      return res.status(429).json({ error: 'Daily AI limit reached', limit: cfg.max_calls_per_user_per_day });
+    }
+
+    const pr = await db.query('SELECT * FROM trading_pairs WHERE symbol=$1 AND is_active=true', [symbol]);
+    const pair = pr.rows[0];
+    if (!pair) return res.status(400).json({ error: 'Unknown symbol' });
+
+    const feed = require('../services/priceFeed');
+    const q = feed.getQuote(symbol, Number(pair.spread_pips), Number(pair.pip_location));
+    if (!q) return res.status(503).json({ error: 'No price available' });
+    const entry = Number(req.body.entry_price) || (isBuy ? q.ask : q.bid);
+
+    // SL beyond the recent swing (40 x 15m candles), buffered by 3 pips
+    const candles = feed.getCandles(symbol, 40, 900);
+    const pip = Math.pow(10, -Number(pair.pip_location));
+    const buffer = 3 * pip;
+    const swing = isBuy ? Math.min(...candles.map(c => c.l)) : Math.max(...candles.map(c => c.h));
+    let riskDist = Math.abs(entry - swing) + buffer;
+    const minRisk = 15 * pip, maxRisk = 60 * pip;
+    riskDist = Math.min(Math.max(riskDist, minRisk), maxRisk);
+
+    const sl = isBuy ? entry - riskDist : entry + riskDist;
+    const tp = isBuy ? entry + riskDist * 2 : entry - riskDist * 2;
+    const dec = Number(pair.pip_location) + 1;
+    const riskPips = riskDist / pip;
+
+    const suggestion = {
+      entry_price: Number(entry.toFixed(dec)),
+      stop_loss: Number(sl.toFixed(dec)),
+      take_profit: Number(tp.toFixed(dec)),
+      risk_pips: Number(riskPips.toFixed(1)),
+      rr: 2,
+      swing_level: Number(swing.toFixed(dec)),
+    };
+
+    // explanation: LLM when configured, deterministic template otherwise
+    const prompt = `For an educational trading exercise on ${symbol}, a ${isBuy ? 'buy' : 'sell'} at ${suggestion.entry_price} has SL ${suggestion.stop_loss} and TP ${suggestion.take_profit} (${suggestion.risk_pips} pips risk, 1:2 reward-to-risk, SL ${isBuy ? 'below' : 'above'} swing ${isBuy ? 'low' : 'high'} ${suggestion.swing_level}). In 3 short sentences explain WHY these levels make sense pedagogically: swing protection, buffer, and R:R. No profit promises.`;
+    let explanation, tokens = 0, cost = 0, source = 'offline';
+    const fallback = `The stop loss sits ${isBuy ? 'below' : 'above'} the recent swing ${isBuy ? 'low' : 'high'} (${suggestion.swing_level}) — the level that would prove the trade idea wrong if price reaches it. A ${(buffer / pip).toFixed(0)}-pip buffer beyond the swing avoids being stopped by ordinary noise (${suggestion.risk_pips} pips total risk). The take profit is set at twice the risk (1:2), so one winning trade can pay for two losing ones — this is the minimum R:R most traders' plans require.`;
+    try {
+      const claude = await callClaude('You are an educational trading coach. Explain SL/TP placement concepts simply. Never promise profit or give signals. Always label as educational.', prompt);
+      if (claude) { explanation = claude.text; tokens = claude.tokens; cost = Math.min(tokens * 0.000001, Number(cfg.max_cost_per_call_usd)); source = 'claude'; }
+    } catch (e) { /* offline below */ }
+    if (!explanation) explanation = fallback;
+    explanation += DISCLAIMER;
+
+    const input = `suggest-sltp ${symbol} ${side} @${suggestion.entry_price} lots=${lot_size}`;
+    await recordUsage(req.user.id, { feature: 'sltp_advisor', input, output: explanation, tokens, cost });
+
+    res.json({ ...suggestion, explanation, source, calls_remaining: cfg.max_calls_per_user_per_day - usage.calls_made - 1 });
+  } catch (e) {
+    console.error('suggestSltp:', e);
+    res.status(500).json({ error: 'Suggestion unavailable' });
+  }
+};
+
+/**
  * POST /ai/mistakes-report — deterministic analysis of closed trades:
  * finds the user's top 3 mistakes and maps each to the lesson that fixes it.
  * (No AI call needed; the report is generated from the trade log.)
@@ -258,4 +329,4 @@ const getUsage = async (req, res) => {
   }
 };
 
-module.exports = { explain, tradeReview, studyPlan, chat, getUsage, mistakesReport };
+module.exports = { explain, tradeReview, studyPlan, chat, getUsage, mistakesReport, suggestSltp };
