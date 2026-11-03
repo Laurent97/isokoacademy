@@ -16,6 +16,10 @@ const adminRoutes = require('./routes/admin');
 
 const app = express();
 
+// Trust the first proxy (Vercel/Lambda edge) so express-rate-limit can
+// read the real client IP from X-Forwarded-For instead of erroring
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet({ frameguard: false, contentSecurityPolicy: {
   directives: {
