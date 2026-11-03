@@ -1,6 +1,6 @@
 import React from 'react';
-import { View } from 'react-native';
-import { Tabs } from 'expo-router';
+import { View, TouchableOpacity } from 'react-native';
+import { Tabs, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useSettings } from '../../src/context/SettingsContext';
@@ -24,6 +24,14 @@ export default function TabsLayout() {
         headerShown: true,
         headerTitle: () => <Logo size="xs" animate={false} />,
         headerTitleAlign: 'left',
+        headerRight: () => (
+          <TouchableOpacity onPress={() => router.push('/profile')}
+            style={{ marginRight: 16, padding: 6 }}
+            accessibilityLabel="Profile"
+            hitSlop={8}>
+            <Ionicons name="person-circle-outline" size={26} color={theme.text} />
+          </TouchableOpacity>
+        ),
         headerStyle: { backgroundColor: theme.card },
         headerShadowVisible: false,
         headerLeftContainerStyle: { paddingLeft: 16 },

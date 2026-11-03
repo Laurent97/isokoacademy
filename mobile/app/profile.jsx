@@ -61,7 +61,7 @@ export default function Profile() {
           <T size="caption" color={theme.textMuted} style={{ marginTop: spacing.sm }}>{t('offline_note')}</T>
         </Card>
 
-        <Btn title={t('logout')} variant="danger" onPress={async () => { await logout(); router.replace('/(auth)/phone'); }} />
+        <Btn title={t('logout')} variant="danger" onPress={async () => { await logout(); router.replace('/landing'); }} />
       </ScrollView>
     </Screen>
   );
