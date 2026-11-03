@@ -141,6 +141,12 @@ function getCandles(symbol, count = 50, seconds = 5) {
   return candles;
 }
 
+/** One-shot real-price refresh for all symbols. No-op without key. */
+function syncRealPrices() {
+  if (!TD_ENABLED) return Promise.resolve();
+  return Promise.all(Object.keys(SYMBOLS).map(s => fetchRealPrice(s).catch(() => null)));
+}
+
 /** Fetch real quotes for all symbols on an interval (30s). No-op without key. */
 function startRealPriceSync(intervalMs = 30000) {
   if (!TD_ENABLED) return;
@@ -150,4 +156,4 @@ function startRealPriceSync(intervalMs = 30000) {
   console.log('[feed] Real price sync enabled (Twelve Data)');
 }
 
-module.exports = { getPrice, getLivePrice, getQuote, getCandles, SYMBOLS, startRealPriceSync };
+module.exports = { getPrice, getLivePrice, getQuote, getCandles, SYMBOLS, startRealPriceSync, syncRealPrices };

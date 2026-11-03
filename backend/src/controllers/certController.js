@@ -72,10 +72,17 @@ const serveFile = async (req, res) => {
     return certService.renderPdfStream(ctx, res);
   }
 
+  if (!file.endsWith('.svg')) return res.status(404).json({ error: 'Not found' });
   const p = path.join(certService.CERT_DIR, file);
-  if (!file.endsWith('.svg') || !fs.existsSync(p)) return res.status(404).json({ error: 'Not found' });
+  if (fs.existsSync(p)) {
+    db.query('UPDATE certificates SET download_count=download_count+1 WHERE certificate_number=$1', [code]).catch(() => {});
+    return res.type('image/svg+xml').send(fs.readFileSync(p));
+  }
+  // serverless/ephemeral fs: re-render from the cert record instead of disk
+  const ctx = await certService.loadForRender(db, code);
+  if (!ctx) return res.status(404).json({ error: 'Not found' });
   db.query('UPDATE certificates SET download_count=download_count+1 WHERE certificate_number=$1', [code]).catch(() => {});
-  res.type('image/svg+xml').send(fs.readFileSync(p));
+  res.type('image/svg+xml').send(await certService.renderSvg(ctx));
 };
 
 // POST /certificates/:code/revoke — admin

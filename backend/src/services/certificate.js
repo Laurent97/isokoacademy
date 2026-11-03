@@ -1,6 +1,7 @@
 const QRCode = require('qrcode');
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const PDFDocument = require('pdfkit');
 
@@ -11,12 +12,29 @@ const INK = '#0C0A09';
 const MUTED = '#57534E';
 
 const ROOT = path.join(__dirname, '..', '..', '..');
-const CERT_DIR = path.join(__dirname, '..', '..', 'certificates');
+// Writable cert cache dir: the bundled dir when possible (local), the OS
+// temp dir on read-only filesystems (Vercel). Files are only a cache —
+// serveFile re-renders from the DB record when a file is missing.
+const CERT_DIR = (() => {
+  const candidates = [
+    process.env.CERT_DIR,
+    path.join(__dirname, '..', '..', 'certificates'),
+    path.join(os.tmpdir(), 'isoko-certificates'),
+  ].filter(Boolean);
+  for (const dir of candidates) {
+    try { fs.mkdirSync(dir, { recursive: true }); fs.accessSync(dir, fs.constants.W_OK); return dir; } catch {}
+  }
+  return candidates[candidates.length - 1];
+})();
 const STAMP_PATH = path.join(__dirname, '..', '..', 'certificates-stamp.png');
 const SIG1_PATH = path.join(__dirname, '..', '..', 'assets', 'sig1.png');
 const SIG2_PATH = path.join(__dirname, '..', '..', 'assets', 'sig2.png');
 const LOGO_PATH = path.join(ROOT, 'mobile', 'assets', 'images', 'logo.png');
-if (!fs.existsSync(CERT_DIR)) fs.mkdirSync(CERT_DIR, { recursive: true });
+
+/** Cache an SVG to disk when the filesystem allows it; never fatal. */
+function cacheSvg(code, svg) {
+  try { fs.writeFileSync(path.join(CERT_DIR, `${code}.svg`), svg); } catch {}
+}
 
 const escXml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -192,7 +210,7 @@ async function issue(db, { userId, levelId, score }) {
   if (existing.rows[0]) {
     // re-render file so design changes apply to already-issued certs
     const ctx = await loadForRender(db, existing.rows[0].certificate_number);
-    if (ctx) fs.writeFileSync(path.join(CERT_DIR, `${existing.rows[0].certificate_number}.svg`), await renderSvg(ctx));
+    if (ctx) cacheSvg(existing.rows[0].certificate_number, await renderSvg(ctx));
     return existing.rows[0];
   }
 
@@ -211,7 +229,7 @@ async function issue(db, { userId, levelId, score }) {
     score: Math.round(score), code, issuedAt: new Date(), verifyUrl, ...signers,
   };
   const svg = await renderSvg(certData);
-  fs.writeFileSync(path.join(CERT_DIR, `${code}.svg`), svg);
+  cacheSvg(code, svg);
   const pdfUrl = `${base}/api/certificates/file/${code}.pdf`;
 
   const r = await db.query(
