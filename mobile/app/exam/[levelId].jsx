@@ -16,6 +16,18 @@ export default function ExamScreen() {
   const [idx, setIdx] = useState(0);
   const [answers, setAnswers] = useState({});
   const [result, setResult] = useState(null);
+  const [ai, setAi] = useState({}); // idx -> {loading, text}
+  const explainAi = async (idx, q) => {
+    setAi(s => ({ ...s, [idx]: { loading: true } }));
+    try {
+      const { data } = await api.post('/ai/explain', {
+        text: `Exam question: ${q.question_en}. Correct answer: ${q.options_en?.[q.correct_index]}. Explain simply why this answer is correct.`
+      });
+      setAi(s => ({ ...s, [idx]: { text: data.response } }));
+    } catch (e) {
+      setAi(s => ({ ...s, [idx]: { text: 'AI explanation unavailable right now.' } }));
+    }
+  };
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [secsLeft, setSecsLeft] = useState(0);
@@ -142,6 +154,23 @@ export default function ExamScreen() {
             </T>
             <Btn title={t('done')} onPress={() => (router.canGoBack() ? router.back() : router.replace('/(tabs)'))} style={{ alignSelf: 'stretch' }} />
           </Card>
+
+          {Array.isArray(result.detail) && result.detail.map((q, i) => (
+            <Card key={i} style={{ marginTop: spacing.sm, borderLeftWidth: 4, borderLeftColor: q.ok === false ? theme.error : theme.success }}>
+              <T weight="700">{language === 'rw' ? q.question_rw : q.question_en}</T>
+              <T size="small" color={theme.textSecondary} style={{ marginTop: spacing.xs }}>
+                {t('correct_answer')}: {(language === 'rw' ? q.options_rw : q.options_en)?.[q.correct_index]}
+              </T>
+              {(language === 'rw' ? q.explanation_rw : q.explanation_en) ? (
+                <T size="small" color={theme.textSecondary} style={{ marginTop: spacing.xs }}>
+                  {language === 'rw' ? q.explanation_rw : q.explanation_en}
+                </T>
+              ) : null}
+              <Btn title={t('ai_explain')} variant="secondary" small loading={ai[i]?.loading}
+                onPress={() => explainAi(i, q)} style={{ marginTop: spacing.sm }} />
+              {ai[i]?.text && <T size="small" color={theme.text} style={{ marginTop: spacing.xs }}>{ai[i].text}</T>}
+            </Card>
+          ))}
         </View>
       )}
     </Screen>
