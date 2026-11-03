@@ -78,6 +78,7 @@ function initRealDb() {
  * Initializes the database. Called once at server startup.
  */
 async function init() {
+  const serverless = !!process.env.VERCEL;
   if (process.env.DATABASE_URL) {
     try {
       initRealDb();
@@ -85,9 +86,15 @@ async function init() {
       console.log('[db] Connected to PostgreSQL at DATABASE_URL');
       return module.exports;
     } catch (err) {
+      if (serverless || process.env.NODE_ENV === 'production') {
+        // never serve an empty dev DB in production — surface the real error
+        throw new Error(`Database connection failed: ${err.message}`);
+      }
       console.warn(`[db] Could not connect to DATABASE_URL (${err.message}). Falling back to in-memory dev DB.`);
       pool = undefined;
     }
+  } else if (serverless || process.env.NODE_ENV === 'production') {
+    throw new Error('DATABASE_URL is not set');
   }
   await initMemoryDb();
   return module.exports;

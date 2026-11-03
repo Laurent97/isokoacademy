@@ -18,6 +18,11 @@ function transformSchema(sql) {
     .replace(/CREATE OR REPLACE FUNCTION[\s\S]*?LANGUAGE plpgsql;/gi, '')
     // CREATE TRIGGER ... ; (no semicolons inside trigger statements)
     .replace(/CREATE TRIGGER[^;]*;/gi, '')
+    // DROP TRIGGER/POLICY/FUNCTION/TYPE statements pg-mem can't parse
+    .replace(/DROP (TRIGGER|POLICY|FUNCTION|TYPE)[^;]*;/gi, '')
+    // DO $$ BEGIN CREATE TYPE ... ; EXCEPTION WHEN duplicate_object ... $$;
+    // pg-mem can't parse DO blocks — unwrap to plain CREATE TYPE (fresh DB anyway)
+    .replace(/DO\s+\$\$\s*BEGIN\s+(CREATE TYPE[\s\S]*?;)\s*EXCEPTION\s+WHEN\s+duplicate_object[\s\S]*?END\s+\$\$;/gi, '$1')
     // Indexes are unnecessary in dev (pg-mem supports them but skip for speed)
     .replace(/CREATE INDEX[^;]*;/gi, '')
     // pg-mem rejects precision/scale on numeric types
