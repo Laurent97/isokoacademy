@@ -1,11 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { ScrollView, View } from 'react-native';
+import { ScrollView, View, TextInput } from 'react-native';
 import { router, useLocalSearchParams, Stack } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { Screen, Card, T, Btn, OptionRow, Pill } from '../../src/components/ui';
 import { useSettings } from '../../src/context/SettingsContext';
 import api, { errMsg } from '../../src/services/api';
-import { spacing, fontSize, TOUCH_TARGET } from '../../src/theme';
+import { spacing, fontSize, radius, TOUCH_TARGET } from '../../src/theme';
 
 export default function ExamScreen() {
   const { t } = useTranslation();
@@ -16,7 +16,20 @@ export default function ExamScreen() {
   const [idx, setIdx] = useState(0);
   const [answers, setAnswers] = useState({});
   const [result, setResult] = useState(null);
-  const [ai, setAi] = useState({}); // idx -> {loading, text}
+  const [ai, setAi] = useState({}); // idx -> {loading, text, askIn, answer}
+  const askAi = async (idx, q) => {
+    const msg = (ai[idx]?.askIn || '').trim();
+    if (!msg) return;
+    setAi(s => ({ ...s, [idx]: { ...s[idx], loading: true } }));
+    try {
+      const { data } = await api.post('/ai/chat', {
+        message: `About this exam question "${q.question_en}" (correct answer: ${q.options_en?.[q.correct_index]}): ${msg}`
+      });
+      setAi(s => ({ ...s, [idx]: { ...s[idx], loading: false, answer: data.response, askIn: '' } }));
+    } catch (e) {
+      setAi(s => ({ ...s, [idx]: { ...s[idx], loading: false, answer: 'AI unavailable right now.' } }));
+    }
+  };
   const explainAi = async (idx, q) => {
     setAi(s => ({ ...s, [idx]: { loading: true } }));
     try {
@@ -169,6 +182,16 @@ export default function ExamScreen() {
               <Btn title={t('ai_explain')} variant="secondary" small loading={ai[i]?.loading}
                 onPress={() => explainAi(i, q)} style={{ marginTop: spacing.sm }} />
               {ai[i]?.text && <T size="small" color={theme.text} style={{ marginTop: spacing.xs }}>{ai[i].text}</T>}
+              <TextInput
+                style={{ borderWidth: 1, borderColor: theme.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, minHeight: 40, marginTop: spacing.sm, color: theme.text, backgroundColor: theme.card, fontSize: fontSize.body }}
+                placeholder={t('ask_ai_placeholder')} placeholderTextColor={theme.placeholder}
+                value={ai[i]?.askIn || ''}
+                onChangeText={v => setAi(s => ({ ...s, [i]: { ...s[i], askIn: v } }))}
+                onSubmitEditing={() => askAi(i, q)}
+              />
+              <Btn title={t('ask_ai')} variant="secondary" small loading={ai[i]?.loading}
+                onPress={() => askAi(i, q)} style={{ marginTop: spacing.xs }} />
+              {ai[i]?.answer && <T size="small" color={theme.text} style={{ marginTop: spacing.xs }}>{ai[i].answer}</T>}
             </Card>
           ))}
         </View>
